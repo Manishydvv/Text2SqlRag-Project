@@ -6,7 +6,7 @@
 # Platform is specified via GitHub Actions buildx configuration
 
 # ============================================================================
-# Stage 1: Import UV binary from official image
+# Stage 1: Import UV binary from official images
 # ============================================================================
 FROM ghcr.io/astral-sh/uv:0.9.26 AS uv
 
