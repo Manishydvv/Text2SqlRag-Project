@@ -1,0 +1,82 @@
+# syntax=docker/dockerfile:1.7
+#
+# Lambda Base Image with Pre-Installed System Dependencies
+#
+# PURPOSE:
+#   This base image contains all system dependencies needed for PDF processing
+#   with the Unstructured library. By pre-building these dependencies, we save
+#   20-25 minutes per deployment (dnf install takes a long time).
+#
+# UPDATE FREQUENCY:
+#   Rebuild this image only when system dependencies change (rarely).
+#   Most deployments will reuse this base image.
+#
+# BUILD AND PUSH:
+#   ./build-base-image.sh
+#
+# COST:
+#   ECR storage: ~$2/month for base image
+#   Savings: ~$21/month in GitHub Actions minutes
+#
+
+FROM public.ecr.aws/lambda/python:3.12
+
+# Install comprehensive runtime dependencies for PDF processing
+# This includes:
+# - PDF processing: poppler, poppler-utils, poppler-glib
+# - Rendering: cairo, pango, freetype, harfbuzz, fontconfig
+# - OpenGL (for Docling): mesa-libGL, mesa-libGLU, mesa-libgbm, libglvnd-*
+# - X11 libraries: libX11, libXext, libXrender, libxcb, libXau, etc.
+# - Image formats: libpng, libjpeg-turbo, libtiff, openjpeg2
+# - Build tools: gcc, gcc-c++ (for Python package compilation)
+# - System utilities: file-libs, glib2
+RUN dnf install -y \
+    # --- PDF core ---
+    poppler \
+    poppler-utils \
+    poppler-glib \
+    \
+    # --- Rendering stack (REQUIRED for Docling) ---
+    cairo \
+    pango \
+    freetype \
+    harfbuzz \
+    fontconfig \
+    \
+    # --- OpenGL / headless rendering ---
+    mesa-libGL \
+    mesa-libGLU \
+    mesa-libgbm \
+    libglvnd-glx \
+    libglvnd-egl \
+    \
+    # --- X11 / XCB (fixes libxcb.so.1) ---
+    libX11 \
+    libXext \
+    libXrender \
+    libxcb \
+    libXau \
+    libXdamage \
+    libXfixes \
+    libXxf86vm \
+    \
+    # --- Image formats ---
+    libpng \
+    libjpeg-turbo \
+    libtiff \
+    openjpeg2 \
+    \
+    # --- Build dependencies (for Python packages) ---
+    gcc \
+    gcc-c++ \
+    \
+    # --- System utilities ---
+    file-libs \
+    glib2 \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# Metadata
+LABEL maintainer="RAG Text-to-SQL Project"
+LABEL description="Lambda base image with PDF processing dependencies"
+LABEL version="3.12"
