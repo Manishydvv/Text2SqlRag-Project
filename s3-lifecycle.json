@@ -1,0 +1,15 @@
+{
+  "Rules": [
+    {
+      "ID": "DeleteOldCache",
+      "Status": "Enabled",
+      "Filter": {},
+      "Expiration": {
+        "Days": 30
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 7
+      }
+    }
+  ]
+}

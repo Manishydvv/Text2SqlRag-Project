@@ -1,0 +1,77 @@
+FROM public.ecr.aws/lambda/python:3.12
+
+# Cross-Platform Build Support:
+# - For ARM64 (recommended): docker build --platform linux/arm64 ...
+# - For x86_64: docker build --platform linux/amd64 ...
+#
+# Image sizes:
+# - ARM64: ~3.6 GB (recommended, 20% cheaper Lambda costs)
+# - x86_64: ~10.1 GB (includes CUDA libraries)
+#
+# See CROSS_PLATFORM_BUILD.md for detailed instructions
+
+# Install build dependencies and system tools
+RUN dnf install -y \
+    gcc \
+    gcc-c++ \
+    make \
+    autoconf \
+    automake \
+    libtool \
+    pkgconfig \
+    wget \
+    tar \
+    gzip \
+    poppler-utils \
+    zlib-devel \
+    libpng-devel \
+    libjpeg-devel \
+    libtiff-devel \
+    && dnf clean all
+
+# Build and install leptonica (tesseract dependency)
+RUN cd /tmp && \
+    wget https://github.com/DanBloomberg/leptonica/releases/download/1.84.1/leptonica-1.84.1.tar.gz && \
+    tar -xzf leptonica-1.84.1.tar.gz && \
+    cd leptonica-1.84.1 && \
+    ./configure && \
+    make -j$(nproc) && \
+    make install && \
+    rm -rf /tmp/leptonica*
+
+# Build and install tesseract
+RUN cd /tmp && \
+    wget https://github.com/tesseract-ocr/tesseract/archive/refs/tags/5.3.3.tar.gz && \
+    tar -xzf 5.3.3.tar.gz && \
+    cd tesseract-5.3.3 && \
+    ./autogen.sh && \
+    PKG_CONFIG_PATH=/usr/local/lib/pkgconfig ./configure && \
+    make -j$(nproc) && \
+    make install && \
+    rm -rf /tmp/tesseract*
+
+# Download English language data (add more languages if needed)
+RUN mkdir -p /usr/local/share/tessdata && \
+    cd /usr/local/share/tessdata && \
+    wget https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata
+
+# Set tesseract environment variables and library path
+ENV TESSDATA_PREFIX=/usr/local/share/tessdata
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install mangum
+
+# Copy application code
+COPY app/ ${LAMBDA_TASK_ROOT}/app/
+COPY lambda_handler.py ${LAMBDA_TASK_ROOT}/
+
+# Fix file permissions for Lambda runtime
+RUN chmod -R 755 ${LAMBDA_TASK_ROOT}/app && \
+    chmod 644 ${LAMBDA_TASK_ROOT}/lambda_handler.py && \
+    find ${LAMBDA_TASK_ROOT}/app -type f -name "*.py" -exec chmod 644 {} \;
+
+# Set Lambda handler
+CMD ["lambda_handler.handler"]

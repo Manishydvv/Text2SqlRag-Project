@@ -1,0 +1,93 @@
+{
+  "test_queries": [
+    {
+      "id": "sql_001",
+      "type": "SQL",
+      "question": "How many customers do we have in total?",
+      "ground_truth": "The total number of customers should be counted from the customers table.",
+      "expected_sql_contains": ["COUNT", "customers"],
+      "notes": "Simple aggregation query"
+    },
+    {
+      "id": "sql_002",
+      "type": "SQL",
+      "question": "What is the total revenue from all delivered orders?",
+      "ground_truth": "Sum of total_amount from orders table where status is 'Delivered'.",
+      "expected_sql_contains": ["SUM", "total_amount", "orders", "Delivered"],
+      "notes": "Aggregation with filtering"
+    },
+    {
+      "id": "sql_003",
+      "type": "SQL",
+      "question": "Show me the average order value by customer segment",
+      "ground_truth": "Average order amount grouped by customer segment, requires JOIN between customers and orders.",
+      "expected_sql_contains": ["AVG", "segment", "JOIN", "GROUP BY"],
+      "notes": "Join query with aggregation"
+    },
+    {
+      "id": "sql_004",
+      "type": "SQL",
+      "question": "List the top 5 customers by total spending",
+      "ground_truth": "Top 5 customers ranked by sum of order amounts.",
+      "expected_sql_contains": ["SUM", "ORDER BY", "LIMIT", "DESC"],
+      "notes": "Ranking query"
+    },
+    {
+      "id": "sql_005",
+      "type": "SQL",
+      "question": "How many orders were placed in the last 30 days?",
+      "ground_truth": "Count of orders with order_date within the last 30 days.",
+      "expected_sql_contains": ["COUNT", "orders", "INTERVAL", "30"],
+      "notes": "Time-based filtering"
+    },
+    {
+      "id": "doc_001",
+      "type": "DOCUMENTS",
+      "question": "What is our company's return policy?",
+      "ground_truth": "The return policy should be explained based on company documentation.",
+      "expected_source_type": "policy document",
+      "notes": "Policy information query"
+    },
+    {
+      "id": "doc_002",
+      "type": "DOCUMENTS",
+      "question": "Explain the procedure for handling customer complaints",
+      "ground_truth": "Step-by-step procedure for customer complaint handling from documentation.",
+      "expected_source_type": "procedure document",
+      "notes": "Procedural information"
+    },
+    {
+      "id": "doc_003",
+      "type": "DOCUMENTS",
+      "question": "What are the different customer segments and how are they defined?",
+      "ground_truth": "Definition of customer segments (SMB, Enterprise, Individual) from documentation.",
+      "expected_source_type": "business documentation",
+      "notes": "Definition/conceptual query"
+    },
+    {
+      "id": "doc_004",
+      "type": "DOCUMENTS",
+      "question": "How should I process a refund request?",
+      "ground_truth": "Instructions for processing refund requests from documentation.",
+      "expected_source_type": "operational guide",
+      "notes": "How-to procedural query"
+    },
+    {
+      "id": "hybrid_001",
+      "type": "HYBRID",
+      "question": "Show me the total revenue by segment and explain our segment classification strategy",
+      "ground_truth": "Combines SQL data (revenue by segment) with document context (segment strategy explanation).",
+      "expected_sql_contains": ["SUM", "segment", "GROUP BY"],
+      "expected_source_type": "strategy document",
+      "notes": "Hybrid query requiring both data and context"
+    }
+  ],
+  "metadata": {
+    "total_queries": 10,
+    "sql_queries": 5,
+    "document_queries": 4,
+    "hybrid_queries": 1,
+    "created": "2025-12-11",
+    "purpose": "Evaluation dataset for RAGAS metrics (faithfulness, answer_relevancy)"
+  }
+}

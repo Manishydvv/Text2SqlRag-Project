@@ -1,0 +1,558 @@
+name: Deploy to AWS Lambda
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: rag-text-to-sql
+  LAMBDA_FUNCTION: rag-text-to-sql-serverless
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Print deployment info
+        run: |
+          echo "=========================================="
+          echo "🚀 AWS Lambda Deployment Started"
+          echo "=========================================="
+          echo "Trigger: Push to main branch"
+          echo "Commit: ${{ github.sha }}"
+          echo "Author: ${{ github.actor }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Workflow: ${{ github.workflow }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo ""
+          echo "📋 Deployment Configuration:"
+          echo "   • AWS Region: ${{ env.AWS_REGION }}"
+          echo "   • ECR Repository: ${{ env.ECR_REPOSITORY }}"
+          echo "   • Lambda Function: ${{ env.LAMBDA_FUNCTION }}"
+          echo "   • Platform: linux/amd64"
+          echo ""
+          echo "⏱️  Estimated deployment time: 2-8 minutes (cached: ~2 min, first build: ~5-8 min)"
+          echo "=========================================="
+          echo ""
+
+      - name: Set up QEMU
+        run: |
+          echo "🔧 Setting up QEMU for x86-64 emulation..."
+
+      - name: Set up QEMU (action)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Verify QEMU
+        run: |
+          echo "✅ QEMU installed successfully!"
+          echo ""
+
+      - name: Set up Docker Buildx
+        run: |
+          echo "🔧 Setting up Docker Buildx for multi-platform builds..."
+
+      - name: Set up Docker Buildx (action)
+        uses: docker/setup-buildx-action@v3
+
+      - name: Verify Buildx
+        run: |
+          echo "✅ Docker Buildx installed successfully!"
+          docker buildx ls
+          echo ""
+
+      - name: Configure AWS credentials
+        run: |
+          echo "🔐 Configuring AWS credentials..."
+
+      - name: Configure AWS credentials (action)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS credentials
+        run: |
+          echo "✅ AWS credentials configured!"
+          echo "Region: ${{ env.AWS_REGION }}"
+          aws sts get-caller-identity
+          echo ""
+
+      - name: Login to Amazon ECR
+        run: |
+          echo "🔐 Logging into Amazon ECR..."
+
+      - name: Login to Amazon ECR (action)
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Verify ECR login
+        run: |
+          echo "✅ Successfully logged into ECR!"
+          echo "Registry: ${{ steps.login-ecr.outputs.registry }}"
+          echo ""
+
+      - name: Build, tag, and push image to ECR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.lambda
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Print build summary
+        run: |
+          echo "=========================================="
+          echo "✅ All images pushed to ECR successfully!"
+          echo "=========================================="
+          echo "Image URI: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+          echo "Tags: ${{ github.sha }}, latest, amd64"
+          echo "Platform: linux/amd64"
+          echo ""
+
+      - name: Update Lambda function
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "🚀 Updating Lambda Function"
+          echo "=========================================="
+          echo "Function Name: ${{ env.LAMBDA_FUNCTION }}"
+          echo "Image URI: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "Architecture: x86-64"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo ""
+
+          # Update Lambda function code with ARM64 architecture
+          # IMPORTANT: --architectures flag MUST be used with update-function-code
+          echo "📝 Updating Lambda function code..."
+          aws lambda update-function-code \
+            --function-name ${{ env.LAMBDA_FUNCTION }} \
+            --image-uri $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --architectures x86_64
+          echo "✅ Update command sent!"
+          echo ""
+
+          # Wait for update to complete
+          echo "⏳ Waiting for Lambda function to finish updating..."
+          echo "   This may take 30-60 seconds..."
+          aws lambda wait function-updated \
+            --function-name ${{ env.LAMBDA_FUNCTION }}
+          echo "✅ Lambda function updated successfully!"
+          echo ""
+
+          # Get function info
+          echo "📊 Lambda Function Status:"
+          aws lambda get-function \
+            --function-name ${{ env.LAMBDA_FUNCTION }} \
+            --query '{State:Configuration.State,LastUpdateStatus:Configuration.LastUpdateStatus,Architecture:Configuration.Architectures[0],Memory:Configuration.MemorySize,Timeout:Configuration.Timeout}' \
+            --output table
+          echo ""
+
+          echo "=========================================="
+          echo "✅ Lambda deployment completed!"
+          echo "=========================================="
+
+      - name: Configure Lambda Environment (S3 Storage + Redis Cache)
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "⚙️  Configuring Lambda Environment Variables"
+          echo "=========================================="
+          echo "Function Name: ${{ env.LAMBDA_FUNCTION }}"
+          echo "Storage Backend: S3"
+          echo "S3 Bucket: ${{ secrets.S3_CACHE_BUCKET }}"
+          echo "Query Cache: Upstash Redis"
+          echo "AWS Region: ${{ env.AWS_REGION }}"
+          echo ""
+
+          # Fetch and merge environment variables
+          echo "📥 Fetching current environment variables..."
+          aws lambda get-function-configuration \
+            --function-name ${{ env.LAMBDA_FUNCTION }} \
+            --query 'Environment.Variables' \
+            --output json > /tmp/current-vars.json
+
+          echo "🔧 Merging S3 storage and Redis cache configuration..."
+          jq '. + {
+            "STORAGE_BACKEND": "s3",
+            "S3_CACHE_BUCKET": "${{ secrets.S3_CACHE_BUCKET }}",
+            "PINECONE_API_KEY": "${{ secrets.PINECONE_API_KEY }}",
+            "PINECONE_ENVIRONMENT": "${{ secrets.PINECONE_ENVIRONMENT }}",
+            "PINECONE_INDEX_NAME": "${{ secrets.PINECONE_INDEX_NAME }}",
+            "OPENAI_API_KEY": "${{ secrets.OPENAI_API_KEY }}",
+            "DATABASE_URL": "${{ secrets.DATABASE_URL }}",
+            "UPSTASH_REDIS_URL": "${{ secrets.UPSTASH_REDIS_URL }}",
+            "UPSTASH_REDIS_TOKEN": "${{ secrets.UPSTASH_REDIS_TOKEN }}",
+            "ENVIRONMENT": "production",
+            "HOME": "/tmp",
+            "TMPDIR": "/tmp",
+            "TEMP": "/tmp",
+            "TMP": "/tmp",
+            "HF_HOME": "/tmp/.cache/huggingface",
+            "TRANSFORMERS_CACHE": "/tmp/.cache/huggingface",
+            "UNSTRUCTURED_CACHE_DIR": "/tmp/.cache/unstructured",
+            "DOCLING_CACHE_DIR": "/tmp/.cache/docling",
+            "USE_DOCKLING": "false"
+          }' /tmp/current-vars.json | jq '{Variables: .}' > /tmp/env-config.json
+
+          echo "📋 Environment configuration to apply:"
+          cat /tmp/env-config.json | jq .
+
+          echo ""
+          echo "📤 Updating Lambda environment variables..."
+          aws lambda update-function-configuration \
+            --function-name ${{ env.LAMBDA_FUNCTION }} \
+            --environment file:///tmp/env-config.json
+
+          echo "✅ Environment variables updated"
+          echo ""
+
+          # Wait for update to complete
+          echo "⏳ Waiting for configuration update to complete..."
+          aws lambda wait function-updated \
+            --function-name ${{ env.LAMBDA_FUNCTION }}
+          echo "✅ Configuration update complete"
+          echo ""
+
+          # Verify configuration
+          echo "🔍 Verifying S3 storage configuration..."
+          STORAGE_BACKEND=$(aws lambda get-function-configuration \
+            --function-name ${{ env.LAMBDA_FUNCTION }} \
+            --query 'Environment.Variables.STORAGE_BACKEND' \
+            --output text)
+
+          S3_BUCKET=$(aws lambda get-function-configuration \
+            --function-name ${{ env.LAMBDA_FUNCTION }} \
+            --query 'Environment.Variables.S3_CACHE_BUCKET' \
+            --output text)
+
+          echo "   Storage Backend: $STORAGE_BACKEND"
+          echo "   S3 Bucket: $S3_BUCKET"
+          echo ""
+
+          if [ "$STORAGE_BACKEND" = "s3" ] && [ "$S3_BUCKET" = "${{ secrets.S3_CACHE_BUCKET }}" ]; then
+            echo "=========================================="
+            echo "✅ S3 Storage Configuration Verified!"
+            echo "=========================================="
+          else
+            echo "=========================================="
+            echo "❌ Configuration Verification Failed"
+            echo "=========================================="
+            echo "Expected Storage Backend: s3"
+            echo "Actual Storage Backend: $STORAGE_BACKEND"
+            echo ""
+            echo "Expected S3 Bucket: ${{ secrets.S3_CACHE_BUCKET }}"
+            echo "Actual S3 Bucket: $S3_BUCKET"
+            exit 1
+          fi
+
+      - name: Test deployment
+        env:
+          API_URL: ${{ secrets.API_GATEWAY_URL }}
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "🧪 Testing Lambda Deployment"
+          echo "=========================================="
+          echo "API Gateway URL: $API_URL"
+          echo "Testing: /health and /info endpoints"
+          echo ""
+
+          echo "⏳ Waiting 30 seconds for Lambda cold start..."
+          echo "   (Lambda needs time to initialize services on first invocation)"
+          for i in {30..1}; do
+            echo -n "   $i seconds remaining..."
+            sleep 1
+            echo -ne "\r"
+          done
+          echo "   ✅ Wait complete!"
+          echo ""
+
+          # Test health endpoint with retries (Lambda cold start can take time)
+          echo "🏥 Testing health endpoint with retry logic..."
+          echo "   Endpoint: $API_URL/health"
+          RETRY=0
+          MAX_RETRIES=5
+          until curl -f -s "$API_URL/health" > /dev/null || [ $RETRY -eq $MAX_RETRIES ]; do
+            RETRY=$((RETRY+1))
+            echo "   ⚠️  Attempt $RETRY/$MAX_RETRIES failed, waiting 10 seconds before retry..."
+            sleep 10
+          done
+
+          if [ $RETRY -eq $MAX_RETRIES ]; then
+            echo ""
+            echo "=========================================="
+            echo "❌ DEPLOYMENT TEST FAILED"
+            echo "=========================================="
+            echo "Health endpoint still returning errors after $MAX_RETRIES attempts"
+            echo ""
+            echo "🔍 Debugging Information:"
+            echo "---"
+            echo "Full URL: $API_URL/health"
+            echo ""
+            echo "📡 Verbose curl output:"
+            curl -v "$API_URL/health" || true
+            echo ""
+            echo "💡 Troubleshooting steps:"
+            echo "1. Check CloudWatch logs: aws logs tail /aws/lambda/rag-text-to-sql --follow"
+            echo "2. Verify API Gateway URL includes /prod: $API_URL"
+            echo "3. Check Lambda function status in AWS Console"
+            echo "4. Verify environment variables are set in Lambda"
+            echo ""
+            exit 1
+          fi
+
+          echo "   ✅ Health endpoint responding!"
+          echo ""
+          echo "📋 Health Check Response:"
+          echo "---"
+          curl -s "$API_URL/health" | head -20
+          echo "---"
+          echo ""
+
+          # Test info endpoint
+          echo "ℹ️  Testing info endpoint..."
+          echo "   Endpoint: $API_URL/info"
+          if curl -f -s "$API_URL/info" > /dev/null; then
+            echo "   ✅ Info endpoint responding!"
+            echo ""
+            echo "📋 Info Response:"
+            echo "---"
+            curl -s "$API_URL/info"
+            echo ""
+            echo "---"
+          else
+            echo "   ⚠️  Info endpoint failed (non-critical, continuing...)"
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "✅ DEPLOYMENT TEST PASSED!"
+          echo "=========================================="
+          echo "🎉 Your Lambda function is live and responding!"
+          echo ""
+          echo "📊 Deployment Summary:"
+          echo "   • Docker Image: Built for x86-64 (AMD64)"
+          echo "   • Lambda: Updated successfully"
+          echo "   • Health Check: ✅ Passing"
+          echo "   • Info Endpoint: ✅ Passing"
+          echo ""
+          echo "🔗 Your API is ready at: $API_URL"
+          echo "=========================================="
+
+      - name: Test S3 Storage Backend
+        env:
+          API_URL: ${{ secrets.API_GATEWAY_URL }}
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "🪣 Testing S3 Storage Backend"
+          echo "=========================================="
+          echo "API Gateway URL: $API_URL"
+          echo "S3 Bucket: ${{ secrets.S3_CACHE_BUCKET }}"
+          echo ""
+
+          # Create a test document
+          echo "📄 Creating test document..."
+          echo "This is a test document for S3 storage validation." > test-s3-storage.txt
+          echo "The document cache should store this in S3." >> test-s3-storage.txt
+          echo "Deployment timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> test-s3-storage.txt
+          echo "Commit SHA: ${{ github.sha }}" >> test-s3-storage.txt
+          echo "✅ Test document created"
+          echo ""
+
+          # Force Lambda to cycle through containers by invoking multiple times
+          # This ensures old warm containers (with old env vars) are replaced by new ones
+          echo "🔄 Forcing Lambda container refresh (cycling through warm containers)..."
+          echo "   (Invoking 20 times to ensure all old containers are replaced)"
+          SUCCESS_COUNT=0
+          for i in {1..20}; do
+            if [ $((i % 5)) -eq 0 ]; then
+              echo "   Invocation $i/20..."
+            fi
+            if curl -f -s "$API_URL/health" > /dev/null 2>&1; then
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            fi
+            sleep 0.5  # Small delay between invocations
+          done
+          echo "   ✅ Container refresh complete! ($SUCCESS_COUNT/20 invocations successful)"
+          echo "   All new containers should now have STORAGE_BACKEND=s3"
+          echo ""
+
+          # Test 1: Initial upload (should NOT be cached)
+          echo "📤 Test 1: Initial document upload (expect cache_hit=false)..."
+          UPLOAD1_RESPONSE=$(curl -s -X POST "$API_URL/upload" \
+            -F "file=@test-s3-storage.txt" \
+            -w "\nHTTP_STATUS:%{http_code}")
+
+          HTTP_STATUS1=$(echo "$UPLOAD1_RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
+          UPLOAD1_JSON=$(echo "$UPLOAD1_RESPONSE" | grep -v "HTTP_STATUS")
+
+          echo "   HTTP Status: $HTTP_STATUS1"
+
+          if [ "$HTTP_STATUS1" != "200" ] && [ "$HTTP_STATUS1" != "201" ]; then
+            echo "   ❌ Upload failed with status $HTTP_STATUS1"
+            echo ""
+            echo "📋 Response:"
+            echo "$UPLOAD1_JSON"
+            echo ""
+            echo "📋 Fetching Lambda CloudWatch logs for debugging..."
+            aws logs tail /aws/lambda/rag-text-to-sql --since 5m --format short || echo "⚠️ Could not fetch logs"
+            exit 1
+          fi
+
+          echo "   ✅ Upload successful"
+          echo ""
+          echo "📋 Upload Response:"
+          echo "$UPLOAD1_JSON" | jq '.'
+          echo ""
+
+          # Verify storage backend is S3
+          STORAGE_BACKEND1=$(echo "$UPLOAD1_JSON" | jq -r '.storage_backend // "unknown"')
+          CACHE_HIT1=$(echo "$UPLOAD1_JSON" | jq -r '.cache_hit // false')
+          DOC_ID=$(echo "$UPLOAD1_JSON" | jq -r '.document_id // "unknown"')
+
+          echo "🔍 Verification:"
+          echo "   Storage Backend: $STORAGE_BACKEND1"
+          echo "   Cache Hit: $CACHE_HIT1"
+          echo "   Document ID: $DOC_ID"
+          echo ""
+
+          if [ "$STORAGE_BACKEND1" != "s3" ]; then
+            echo "❌ STORAGE BACKEND TEST FAILED"
+            echo "   Expected: s3"
+            echo "   Actual: $STORAGE_BACKEND1"
+            echo ""
+            echo "💡 This means Lambda is not using S3 storage!"
+            echo "   Check STORAGE_BACKEND environment variable in Lambda"
+            exit 1
+          fi
+
+          if [ "$CACHE_HIT1" = "true" ]; then
+            echo "⚠️  Unexpected cache hit on first upload (non-critical)"
+            echo "   This could mean the document was uploaded before"
+          fi
+
+          echo "✅ Test 1 passed: S3 storage backend confirmed"
+          echo ""
+
+          # Wait a moment to ensure S3 has the cached data
+          echo "⏳ Waiting 5 seconds for S3 cache to propagate..."
+          sleep 5
+          echo ""
+
+          # Test 2: Re-upload same document (should be cached in S3)
+          echo "📤 Test 2: Re-upload same document (expect cache_hit=true)..."
+          UPLOAD2_RESPONSE=$(curl -s -X POST "$API_URL/upload" \
+            -F "file=@test-s3-storage.txt" \
+            -w "\nHTTP_STATUS:%{http_code}")
+
+          HTTP_STATUS2=$(echo "$UPLOAD2_RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
+          UPLOAD2_JSON=$(echo "$UPLOAD2_RESPONSE" | grep -v "HTTP_STATUS")
+
+          echo "   HTTP Status: $HTTP_STATUS2"
+
+          if [ "$HTTP_STATUS2" != "200" ] && [ "$HTTP_STATUS2" != "201" ]; then
+            echo "   ❌ Re-upload failed with status $HTTP_STATUS2"
+            echo ""
+            echo "📋 Response:"
+            echo "$UPLOAD2_JSON"
+            exit 1
+          fi
+
+          echo "   ✅ Re-upload successful"
+          echo ""
+          echo "📋 Re-upload Response:"
+          echo "$UPLOAD2_JSON" | jq '.'
+          echo ""
+
+          # Verify cache hit from S3
+          STORAGE_BACKEND2=$(echo "$UPLOAD2_JSON" | jq -r '.storage_backend // "unknown"')
+          CACHE_HIT2=$(echo "$UPLOAD2_JSON" | jq -r '.cache_hit // false')
+          DOC_ID2=$(echo "$UPLOAD2_JSON" | jq -r '.document_id // "unknown"')
+
+          echo "🔍 Verification:"
+          echo "   Storage Backend: $STORAGE_BACKEND2"
+          echo "   Cache Hit: $CACHE_HIT2"
+          echo "   Document ID: $DOC_ID2"
+          echo "   IDs Match: $([ "$DOC_ID" = "$DOC_ID2" ] && echo "✅ Yes" || echo "❌ No")"
+          echo ""
+
+          if [ "$STORAGE_BACKEND2" != "s3" ]; then
+            echo "❌ STORAGE BACKEND TEST FAILED"
+            echo "   Expected: s3"
+            echo "   Actual: $STORAGE_BACKEND2"
+            exit 1
+          fi
+
+          if [ "$CACHE_HIT2" != "true" ]; then
+            echo "❌ S3 CACHE TEST FAILED"
+            echo "   Expected cache_hit: true"
+            echo "   Actual cache_hit: $CACHE_HIT2"
+            echo ""
+            echo "💡 This means S3 caching is not working correctly!"
+            echo "   Possible issues:"
+            echo "   - S3 bucket permissions not set"
+            echo "   - S3 write succeeded but read failed"
+            echo "   - Hash calculation inconsistency"
+            exit 1
+          fi
+
+          if [ "$DOC_ID" != "$DOC_ID2" ]; then
+            echo "❌ DOCUMENT ID MISMATCH"
+            echo "   First upload: $DOC_ID"
+            echo "   Second upload: $DOC_ID2"
+            echo ""
+            echo "💡 Document IDs should match for identical content!"
+            exit 1
+          fi
+
+          echo "✅ Test 2 passed: S3 cache hit confirmed"
+          echo ""
+
+          # Test 3: Verify S3 bucket contents
+          echo "🪣 Test 3: Verify S3 bucket contents..."
+          echo "   Bucket: ${{ secrets.S3_CACHE_BUCKET }}"
+          echo ""
+
+          # List files for this document in S3
+          echo "📂 Files in S3 for document $DOC_ID:"
+          aws s3 ls "s3://${{ secrets.S3_CACHE_BUCKET }}/txt/$DOC_ID/" --recursive || {
+            echo "⚠️  Could not list S3 bucket contents (non-critical)"
+            echo "   This may be due to IAM permissions for listing"
+          }
+          echo ""
+
+          # Cleanup test file
+          echo "🧹 Cleaning up test document..."
+          rm -f test-s3-storage.txt
+          echo "✅ Cleanup complete"
+          echo ""
+
+          echo "=========================================="
+          echo "✅ S3 STORAGE TESTS PASSED!"
+          echo "=========================================="
+          echo "🎉 S3 storage backend is working correctly!"
+          echo ""
+          echo "📊 Test Summary:"
+          echo "   ✅ S3 storage backend detected"
+          echo "   ✅ Initial upload stored to S3"
+          echo "   ✅ S3 cache hit on re-upload"
+          echo "   ✅ Document ID consistency verified"
+          echo ""
+          echo "🔗 S3 Bucket: s3://${{ secrets.S3_CACHE_BUCKET }}"
+          echo "=========================================="

@@ -1,0 +1,49 @@
+# API Framework
+fastapi[standard]  # Includes uvicorn[standard] with uvloop
+pydantic
+pydantic-settings
+python-multipart
+mangum  # AWS Lambda adapter for FastAPI
+
+# Document Processing
+docling                # Advanced PDF parsing with layout analysis
+docling-core           # Chunking infrastructure
+semchunk               # Semantic text splitting (used by HybridChunker)
+unstructured[pdf]      # PDF support via poppler (NO PyTorch/ONNX - ARM64 compatible)
+python-magic  # For file type detection (uses system libmagic on macOS)
+pillow  # Image processing for document parsing
+#unstructured[all-docs]
+#pdfminer.six==20231228
+# Embeddings & Vector DB
+openai
+pinecone[grpc]
+tiktoken
+
+# Text-to-SQL
+vanna[fastapi,openai,postgres]
+sqlalchemy
+psycopg2-binary
+faker
+
+# Evaluation & Monitoring
+ragas
+datasets
+opik
+
+# Utilities
+python-dotenv
+httpx
+
+# Caching
+numpy  # Efficient binary storage of embeddings
+upstash-redis  # Redis cache for query results (serverless-friendly)
+
+# AWS Services (for S3 storage backend)
+boto3  # AWS SDK for S3 storage
+
+# Development
+pytest
+pytest-asyncio
+black
+ruff
+moto[s3]  # Mock AWS S3 for testing

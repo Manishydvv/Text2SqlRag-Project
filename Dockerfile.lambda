@@ -1,0 +1,137 @@
+# syntax=docker/dockerfile:1.7
+
+# Cross-Platform Build Support:
+# - For x86-64 (current): docker build --platform linux/amd64 ...
+# - For ARM64: docker build --platform linux/arm64 ...
+# Platform is specified via GitHub Actions buildx configuration
+
+# ============================================================================
+# Stage 1: Import UV binary from official image
+# ============================================================================
+FROM ghcr.io/astral-sh/uv:0.9.26 AS uv
+
+# ============================================================================
+# Stage 2: Builder stage - Install dependencies
+# ============================================================================
+FROM public.ecr.aws/lambda/python:3.12 AS builder 
+
+# UV environment variables for optimal performance
+# - UV_COMPILE_BYTECODE=1: Precompile bytecode (faster cold starts)
+# - UV_NO_INSTALLER_METADATA=1: Deterministic layers (smaller image)
+# - UV_LINK_MODE=copy: Cache mount compatibility
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_NO_INSTALLER_METADATA=1 \
+    UV_LINK_MODE=copy
+
+# Install system dependencies
+# Note: tesseract removed for Lambda - OCR can be added via Lambda layers
+# To add tesseract:
+#   1. Use pre-built layer (recommended): See LAMBDA_LAYERS.md
+#   2. Build custom layer: Run ./build-tesseract-layer.sh
+#   3. Add layer ARN to Lambda function configuration
+RUN dnf install -y \
+    poppler-utils \
+    gcc \
+    gcc-c++ \
+    && dnf clean all
+
+# Copy requirements.txt FIRST (layer caching optimization)
+# This ensures package installations are cached separately from code changes
+COPY requirements.txt .
+
+# Install Python dependencies with UV + BuildKit cache mount
+# - UV is 10-100x faster than pip for large dependency sets
+# - Cache mount preserves downloads across builds (5-day retention in GitHub Actions)
+# - Packages install to LAMBDA_TASK_ROOT for Lambda compatibility
+RUN --mount=from=uv,source=/uv,target=/bin/uv \
+    --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --no-cache -r requirements.txt --target "${LAMBDA_TASK_ROOT}"
+
+# Copy application code AFTER dependencies
+# This ensures code changes don't invalidate the package cache layer
+COPY app/ ${LAMBDA_TASK_ROOT}/app/
+COPY lambda_handler.py ${LAMBDA_TASK_ROOT}/
+
+# Fix file permissions for Lambda runtime (do this in builder stage where find is available)
+RUN chmod -R 755 ${LAMBDA_TASK_ROOT}/app && \
+    chmod 644 ${LAMBDA_TASK_ROOT}/lambda_handler.py && \
+    find ${LAMBDA_TASK_ROOT}/app -type f -name "*.py" -exec chmod 644 {} \;
+
+# ============================================================================
+# Stage 3: Final minimal runtime image
+# ============================================================================
+FROM public.ecr.aws/lambda/python:3.12
+
+# Install comprehensive runtime dependencies for PDF processing with Unstructured library
+# Research: LAMBDA_DEPENDENCIES_RESEARCH.md
+#
+# Core PDF Processing:
+# - poppler, poppler-utils, poppler-glib: PDF parsing and manipulation
+#
+# OpenGL/Graphics (CRITICAL - fixes libGL.so.1 errors):
+# - mesa-libGL: Mesa OpenGL runtime (provides libGL.so.1)
+# - mesa-libGLU: Mesa OpenGL Utility library
+# - mesa-libgbm: Generic Buffer Management
+# - libglvnd-glx, libglvnd-egl: Vendor-neutral GL dispatch
+#
+# X11 Libraries (required by Mesa):
+# - libX11, libXext, libXrender: Core X11 libraries
+# - libxcb, libXau: X11 C bindings and authentication
+# - libXdamage, libXfixes, libXxf86vm: X11 extensions
+#
+# Image Processing:
+# - libpng, libjpeg-turbo, openjpeg2: Image format support
+# - libtiff: TIFF format support
+#
+# System Utilities:
+# - file-libs: File type detection (libmagic)
+# - glib2: Core GNOME libraries
+# - fontconfig: Font configuration and rendering
+#
+RUN dnf install -y \
+    # --- PDF core ---
+    poppler \
+    poppler-utils \
+    poppler-glib \
+    \
+    # --- Rendering stack (REQUIRED for Docling) ---
+    cairo \
+    pango \
+    freetype \
+    harfbuzz \
+    fontconfig \
+    \
+    # --- OpenGL / headless rendering ---
+    mesa-libGL \
+    mesa-libGLU \
+    mesa-libgbm \
+    libglvnd-glx \
+    libglvnd-egl \
+    \
+    # --- X11 / XCB (fixes libxcb.so.1) ---
+    libX11 \
+    libXext \
+    libXrender \
+    libxcb \
+    libXau \
+    libXdamage \
+    libXfixes \
+    libXxf86vm \
+    \
+    # --- Image formats ---
+    libpng \
+    libjpeg-turbo \
+    libtiff \
+    openjpeg2 \
+    \
+    # --- System ---
+    file-libs \
+    glib2 \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# Copy everything from builder stage (permissions already fixed)
+COPY --from=builder ${LAMBDA_TASK_ROOT} ${LAMBDA_TASK_ROOT}
+
+# Set Lambda handler
+CMD ["lambda_handler.handler"]

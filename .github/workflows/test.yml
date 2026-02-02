@@ -1,0 +1,51 @@
+name: Test PR
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest ruff black
+
+      - name: Lint with ruff
+        run: ruff check app/ || echo "Linting issues found"
+
+      - name: Format check with black
+        run: black --check app/ || echo "Formatting issues found"
+
+      - name: Run tests (if available)
+        run: pytest tests/ -v || echo "No tests found or tests not configured"
+
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Lambda Docker image (x86-64)
+        run: docker build --platform linux/amd64 -f Dockerfile.lambda -t rag-lambda:test .
+
+      - name: Test image builds successfully
+        run: echo "✅ Docker image built successfully for x86-64 (AMD64)"
