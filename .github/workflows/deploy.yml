@@ -7,7 +7,7 @@ on:
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: rag-text-to-sql
-  LAMBDA_FUNCTION: rag-text-to-sql-serverless
+  LAMBDA_FUNCTION: rag-text-to-sql-server
 
 jobs:
   deploy:
