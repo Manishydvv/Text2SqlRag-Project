@@ -81,8 +81,8 @@ jobs:
       - name: Pull base image
         run: |
           echo "📥 Pulling Lambda base image..."
-          echo "   Image: ${{ steps.login-ecr.outputs.registry }}/lambda-python-deps:latest"
-          docker pull ${{ steps.login-ecr.outputs.registry }}/lambda-python-deps:latest
+          echo "   Image: ${{ steps.login-ecr.outputs.registry }}/lambda-python-deps:3.12"
+          docker pull ${{ steps.login-ecr.outputs.registry }}/lambda-python-deps:3.12
           echo "✅ Base image pulled successfully"
           echo ""
 
