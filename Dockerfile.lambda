@@ -45,7 +45,7 @@ COPY requirements.txt .
 # - Packages install to LAMBDA_TASK_ROOT for Lambda compatibility
 RUN --mount=from=uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -r requirements.txt --target "${LAMBDA_TASK_ROOT}"
+    uv pip install -r requirements.txt --target "${LAMBDA_TASK_ROOT}" --index-strategy unsafe-best-match
 
 # Copy application code AFTER dependencies
 # This ensures code changes don't invalidate the package cache layer

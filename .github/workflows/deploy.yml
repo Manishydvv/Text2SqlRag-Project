@@ -7,6 +7,8 @@ on:
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: rag-text-to-sql
+  BASE_IMAGE_REPOSITORY: lambda-python-deps
+  BASE_IMAGE_TAG: "3.12"
   LAMBDA_FUNCTION: rag-text-to-sql-server
 
 jobs:
@@ -14,6 +16,39 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Free up disk space
+        run: |
+          echo "🧹 Freeing up disk space on GitHub Actions runner..."
+          echo ""
+          echo "📊 Disk space before cleanup:"
+          df -h /
+          echo ""
+
+          # Remove unnecessary pre-installed software
+          echo "🗑️  Removing unnecessary software..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+          # Clean up Docker
+          echo "🐳 Cleaning up Docker..."
+          docker system prune -af --volumes || true
+
+          # Clean up package caches
+          echo "📦 Cleaning up package caches..."
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
+          echo ""
+          echo "📊 Disk space after cleanup:"
+          df -h /
+          echo ""
+          echo "✅ Cleanup complete!"
+          echo ""
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -35,7 +70,9 @@ jobs:
           echo "   • Lambda Function: ${{ env.LAMBDA_FUNCTION }}"
           echo "   • Platform: linux/amd64"
           echo ""
-          echo "⏱️  Estimated deployment time: 2-8 minutes (cached: ~2 min, first build: ~5-8 min)"
+          echo "⏱️  Estimated deployment time:"
+          echo "   • First deployment (new AWS account): ~30-35 minutes (builds base image)"
+          echo "   • Subsequent deployments: ~5-7 minutes (uses cached base image)"
           echo "=========================================="
           echo ""
 
@@ -78,12 +115,73 @@ jobs:
           echo "Registry: ${{ steps.login-ecr.outputs.registry }}"
           echo ""
 
-      - name: Pull base image
+      - name: Check and build base image if needed
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          echo "📥 Pulling Lambda base image..."
-          echo "   Image: ${{ steps.login-ecr.outputs.registry }}/lambda-python-deps:3.12"
-          docker pull ${{ steps.login-ecr.outputs.registry }}/lambda-python-deps:3.12
-          echo "✅ Base image pulled successfully"
+          echo "=========================================="
+          echo "🔍 Checking for Lambda Base Image"
+          echo "=========================================="
+          echo "Repository: ${{ env.BASE_IMAGE_REPOSITORY }}"
+          echo "Tag: ${{ env.BASE_IMAGE_TAG }}"
+          echo "Full image: $ECR_REGISTRY/${{ env.BASE_IMAGE_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }}"
+          echo ""
+
+          # Try to pull the base image
+          if docker pull $ECR_REGISTRY/${{ env.BASE_IMAGE_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} 2>/dev/null; then
+            echo "✅ Base image found in ECR - using cached version"
+            echo "   This is the fast path (deployment will take ~5-7 minutes)"
+            echo ""
+          else
+            echo "⚠️  Base image not found in ECR"
+            echo "   This is expected for first-time setup or new AWS accounts"
+            echo ""
+            echo "=========================================="
+            echo "🏗️  Building Lambda Base Image (One-Time)"
+            echo "=========================================="
+            echo "⏱️  This will take 25-30 minutes (one-time only)"
+            echo "   Future deployments will be 6-7x faster!"
+            echo ""
+            echo "📦 Building base image with system dependencies..."
+            echo "   - PDF processing: poppler, poppler-utils, poppler-glib"
+            echo "   - Rendering: cairo, pango, freetype, harfbuzz"
+            echo "   - OpenGL: mesa-libGL, mesa-libGLU, mesa-libgbm"
+            echo "   - X11: libX11, libXext, libXrender, libxcb"
+            echo "   - Image formats: libpng, libjpeg-turbo, libtiff"
+            echo "   - Build tools: gcc, gcc-c++"
+            echo ""
+
+            # Build the base image
+            docker build \
+              --platform linux/amd64 \
+              -f Dockerfile.lambda.base \
+              -t $ECR_REGISTRY/${{ env.BASE_IMAGE_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
+              .
+
+            echo ""
+            echo "✅ Base image built successfully!"
+            echo ""
+            echo "📤 Pushing base image to ECR..."
+            docker push $ECR_REGISTRY/${{ env.BASE_IMAGE_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }}
+            echo ""
+            echo "=========================================="
+            echo "✅ Base Image Setup Complete!"
+            echo "=========================================="
+            echo "🎉 Base image is now cached in ECR"
+            echo "   All future deployments will use this cached image"
+            echo "   Expected deployment time: ~5-7 minutes (6-7x faster!)"
+            echo ""
+
+            # Clean up Docker to free space for application build
+            echo "🧹 Cleaning up Docker build cache to free disk space..."
+            docker system prune -f
+            echo "✅ Cleanup complete"
+            echo ""
+          fi
+
+          # Show disk space after base image handling
+          echo "📊 Disk space status:"
+          df -h / | grep -E "Filesystem|/$"
           echo ""
 
       - name: Build Docker image

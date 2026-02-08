@@ -6,6 +6,7 @@ python-multipart
 mangum  # AWS Lambda adapter for FastAPI
 
 # Document Processing
+--extra-index-url https://download.pytorch.org/whl/cpu
 docling                # Advanced PDF parsing with layout analysis
 docling-core           # Chunking infrastructure
 semchunk               # Semantic text splitting (used by HybridChunker)
